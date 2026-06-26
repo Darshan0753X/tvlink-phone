@@ -1,0 +1,424 @@
+package com.tvlink.phone
+
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Color
+import android.net.Uri
+import android.os.Bundle
+import android.provider.OpenableColumns
+import android.view.View
+import android.widget.*
+import androidx.appcompat.app.AppCompatActivity
+import kotlinx.coroutines.*
+import org.java_websocket.client.WebSocketClient
+import org.java_websocket.handshake.ServerHandshake
+import java.io.InputStream
+import java.net.*
+
+class MainActivity : AppCompatActivity() {
+
+    // UI elements
+    private lateinit var statusDot: View
+    private lateinit var statusText: TextView
+    private lateinit var btnScan: Button
+    private lateinit var tvLog: TextView
+
+    // Tab buttons
+    private lateinit var tabRemote: Button
+    private lateinit var tabBrowser: Button
+    private lateinit var tabFiles: Button
+    private lateinit var tabMedia: Button
+
+    // Panels
+    private lateinit var panelRemote: android.widget.LinearLayout
+    private lateinit var panelBrowser: android.widget.LinearLayout
+    private lateinit var panelFiles: android.widget.LinearLayout
+    private lateinit var panelMedia: android.widget.LinearLayout
+
+    // Remote buttons
+    private lateinit var btnUp: Button
+    private lateinit var btnDown: Button
+    private lateinit var btnLeft: Button
+    private lateinit var btnRight: Button
+    private lateinit var btnOk: Button
+    private lateinit var btnBack: Button
+    private lateinit var btnHome: Button
+    private lateinit var btnMenu: Button
+
+    // Browser
+    private lateinit var etUrl: EditText
+    private lateinit var btnOpenUrl: Button
+    private lateinit var btnYoutube: Button
+    private lateinit var btnGoogle: Button
+    private lateinit var btnNetflix: Button
+
+    // Files
+    private lateinit var btnPickFile: Button
+    private lateinit var tvTransferStatus: TextView
+    private lateinit var progressTransfer: ProgressBar
+
+    // Media
+    private lateinit var tvNowPlaying: TextView
+    private lateinit var btnPlayPause: Button
+    private lateinit var btnPrev: Button
+    private lateinit var btnNext: Button
+    private lateinit var btnRewind: Button
+    private lateinit var btnFastForward: Button
+    private lateinit var seekVolume: SeekBar
+    private lateinit var tvVolume: TextView
+
+    private var webSocketClient: WebSocketClient? = null
+    private var tvIpAddress: String? = null
+    private val PORT = 8887
+    private val FILE_PORT = 8888
+    private val PICK_FILE_REQUEST = 100
+    private var isConnected = false
+    private var isPlaying = false
+    private val logMessages = mutableListOf<String>()
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        initViews()
+        setupTabs()
+        setupButtons()
+    }
+
+    private fun initViews() {
+        statusDot = findViewById(R.id.statusDot)
+        statusText = findViewById(R.id.statusText)
+        btnScan = findViewById(R.id.btnScan)
+        tvLog = findViewById(R.id.tvLog)
+
+        tabRemote = findViewById(R.id.tabRemote)
+        tabBrowser = findViewById(R.id.tabBrowser)
+        tabFiles = findViewById(R.id.tabFiles)
+        tabMedia = findViewById(R.id.tabMedia)
+
+        panelRemote = findViewById(R.id.panelRemote)
+        panelBrowser = findViewById(R.id.panelBrowser)
+        panelFiles = findViewById(R.id.panelFiles)
+        panelMedia = findViewById(R.id.panelMedia)
+
+        btnUp = findViewById(R.id.btnUp)
+        btnDown = findViewById(R.id.btnDown)
+        btnLeft = findViewById(R.id.btnLeft)
+        btnRight = findViewById(R.id.btnRight)
+        btnOk = findViewById(R.id.btnOk)
+        btnBack = findViewById(R.id.btnBack)
+        btnHome = findViewById(R.id.btnHome)
+        btnMenu = findViewById(R.id.btnMenu)
+
+        etUrl = findViewById(R.id.etUrl)
+        btnOpenUrl = findViewById(R.id.btnOpenUrl)
+        btnYoutube = findViewById(R.id.btnYoutube)
+        btnGoogle = findViewById(R.id.btnGoogle)
+        btnNetflix = findViewById(R.id.btnNetflix)
+
+        btnPickFile = findViewById(R.id.btnPickFile)
+        tvTransferStatus = findViewById(R.id.tvTransferStatus)
+        progressTransfer = findViewById(R.id.progressTransfer)
+
+        tvNowPlaying = findViewById(R.id.tvNowPlaying)
+        btnPlayPause = findViewById(R.id.btnPlayPause)
+        btnPrev = findViewById(R.id.btnPrev)
+        btnNext = findViewById(R.id.btnNext)
+        btnRewind = findViewById(R.id.btnRewind)
+        btnFastForward = findViewById(R.id.btnFastForward)
+        seekVolume = findViewById(R.id.seekVolume)
+        tvVolume = findViewById(R.id.tvVolume)
+    }
+
+    private fun setupTabs() {
+        fun switchTab(activeTab: Button, activePanel: android.widget.LinearLayout) {
+            listOf(tabRemote, tabBrowser, tabFiles, tabMedia).forEach {
+                it.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#1E2330"))
+                it.setTextColor(Color.parseColor("#7A8499"))
+            }
+            listOf(panelRemote, panelBrowser, panelFiles, panelMedia).forEach {
+                it.visibility = View.GONE
+            }
+            activeTab.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#00C2FF"))
+            activeTab.setTextColor(Color.parseColor("#000000"))
+            activePanel.visibility = View.VISIBLE
+        }
+
+        tabRemote.setOnClickListener { switchTab(tabRemote, panelRemote) }
+        tabBrowser.setOnClickListener { switchTab(tabBrowser, panelBrowser) }
+        tabFiles.setOnClickListener { switchTab(tabFiles, panelFiles) }
+        tabMedia.setOnClickListener { switchTab(tabMedia, panelMedia) }
+    }
+
+    private fun setupButtons() {
+        btnScan.setOnClickListener { scanForTV() }
+
+        // D-pad
+        btnUp.setOnClickListener { sendCommand("DPAD_UP") }
+        btnDown.setOnClickListener { sendCommand("DPAD_DOWN") }
+        btnLeft.setOnClickListener { sendCommand("DPAD_LEFT") }
+        btnRight.setOnClickListener { sendCommand("DPAD_RIGHT") }
+        btnOk.setOnClickListener { sendCommand("DPAD_OK") }
+        btnBack.setOnClickListener { sendCommand("BACK") }
+        btnHome.setOnClickListener { sendCommand("HOME") }
+        btnMenu.setOnClickListener { sendCommand("MENU") }
+
+        // Browser
+        btnOpenUrl.setOnClickListener {
+            val url = etUrl.text.toString().trim()
+            if (url.isNotEmpty()) {
+                val fullUrl = if (url.startsWith("http")) url else "https://$url"
+                sendCommand("OPEN_URL:$fullUrl")
+                etUrl.text.clear()
+            }
+        }
+        btnYoutube.setOnClickListener { sendCommand("OPEN_URL:https://youtube.com") }
+        btnGoogle.setOnClickListener { sendCommand("OPEN_URL:https://google.com") }
+        btnNetflix.setOnClickListener { sendCommand("OPEN_URL:https://netflix.com") }
+
+        // Files
+        btnPickFile.setOnClickListener {
+            val intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.type = "*/*"
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            startActivityForResult(intent, PICK_FILE_REQUEST)
+        }
+
+        // Media
+        btnPlayPause.setOnClickListener {
+            isPlaying = !isPlaying
+            btnPlayPause.text = if (isPlaying) "⏸" else "▶"
+            sendCommand(if (isPlaying) "PLAY" else "PAUSE")
+        }
+        btnPrev.setOnClickListener { sendCommand("PREV") }
+        btnNext.setOnClickListener { sendCommand("NEXT") }
+        btnRewind.setOnClickListener { sendCommand("REWIND") }
+        btnFastForward.setOnClickListener { sendCommand("FAST_FORWARD") }
+        seekVolume.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                tvVolume.text = "$progress%"
+                if (fromUser) sendCommand("VOLUME:$progress")
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+    }
+
+    private fun scanForTV() {
+        addLog("🔍 Scanning Wi-Fi for TVLink...")
+        btnScan.isEnabled = false
+        btnScan.text = "Scanning..."
+
+        scope.launch(Dispatchers.IO) {
+            val subnet = getSubnet()
+            if (subnet == null) {
+                withContext(Dispatchers.Main) {
+                    addLog("❌ Not connected to Wi-Fi")
+                    btnScan.isEnabled = true
+                    btnScan.text = "Find TV"
+                }
+                return@launch
+            }
+
+            var found = false
+            // Scan common IPs
+            for (i in 1..254) {
+                val ip = "$subnet.$i"
+                try {
+                    val socket = Socket()
+                    socket.connect(InetSocketAddress(ip, PORT), 50)
+                    socket.close()
+                    withContext(Dispatchers.Main) {
+                        tvIpAddress = ip
+                        connectWebSocket(ip)
+                        addLog("📺 Found TV at $ip")
+                    }
+                    found = true
+                    break
+                } catch (e: Exception) {
+                    // Not found at this IP, continue
+                }
+            }
+
+            if (!found) {
+                withContext(Dispatchers.Main) {
+                    addLog("❌ TVLink not found. Is TV app running?")
+                    btnScan.isEnabled = true
+                    btnScan.text = "Find TV"
+                }
+            }
+        }
+    }
+
+    private fun getSubnet(): String? {
+        return try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            for (intf in interfaces) {
+                for (addr in intf.inetAddresses) {
+                    if (!addr.isLoopbackAddress && addr is Inet4Address) {
+                        val ip = addr.hostAddress ?: continue
+                        val parts = ip.split(".")
+                        if (parts.size == 4) {
+                            return "${parts[0]}.${parts[1]}.${parts[2]}"
+                        }
+                    }
+                }
+            }
+            null
+        } catch (e: Exception) { null }
+    }
+
+    private fun connectWebSocket(ip: String) {
+        val uri = URI("ws://$ip:$PORT")
+        webSocketClient = object : WebSocketClient(uri) {
+            override fun onOpen(handshakedata: ServerHandshake?) {
+                runOnUiThread {
+                    isConnected = true
+                    statusDot.setBackgroundColor(Color.parseColor("#00E676"))
+                    statusText.text = "Connected to TV ($ip)"
+                    statusText.setTextColor(Color.parseColor("#00E676"))
+                    btnScan.isEnabled = true
+                    btnScan.text = "Reconnect"
+                    addLog("✅ Connected!")
+                }
+            }
+            override fun onMessage(message: String?) {
+                runOnUiThread {
+                    message?.let { handleTVMessage(it) }
+                }
+            }
+            override fun onClose(code: Int, reason: String?, remote: Boolean) {
+                runOnUiThread {
+                    isConnected = false
+                    statusDot.setBackgroundColor(Color.parseColor("#FF4B4B"))
+                    statusText.text = "Disconnected"
+                    statusText.setTextColor(Color.parseColor("#7A8499"))
+                    addLog("⚠️ Disconnected from TV")
+                    btnScan.isEnabled = true
+                    btnScan.text = "Find TV"
+                }
+            }
+            override fun onError(ex: Exception?) {
+                runOnUiThread { addLog("❌ Error: ${ex?.message}") }
+            }
+        }
+        webSocketClient?.connect()
+    }
+
+    private fun handleTVMessage(msg: String) {
+        when {
+            msg.startsWith("PLAYING:") -> {
+                val name = msg.removePrefix("PLAYING:")
+                tvNowPlaying.text = "▶ $name"
+                isPlaying = true
+                btnPlayPause.text = "⏸"
+            }
+            msg.startsWith("STATUS:") -> addLog("TV: ${msg.removePrefix("STATUS:")}")
+        }
+    }
+
+    private fun sendCommand(command: String) {
+        if (!isConnected) {
+            addLog("⚠️ Not connected to TV")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                webSocketClient?.send(command)
+                withContext(Dispatchers.Main) { addLog("→ $command") }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { addLog("❌ Send failed: ${e.message}") }
+            }
+        }
+    }
+
+    private fun addLog(message: String) {
+        logMessages.add(0, message)
+        if (logMessages.size > 5) logMessages.removeAt(logMessages.size - 1)
+        tvLog.text = logMessages.joinToString("\n")
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PICK_FILE_REQUEST && resultCode == Activity.RESULT_OK) {
+            data?.data?.let { uri -> sendFile(uri) }
+        }
+    }
+
+    private fun sendFile(uri: Uri) {
+        val ip = tvIpAddress ?: run {
+            addLog("❌ Not connected to TV")
+            return
+        }
+
+        val fileName = getFileName(uri)
+        addLog("📤 Sending: $fileName")
+        tvTransferStatus.text = "Sending $fileName..."
+        progressTransfer.visibility = View.VISIBLE
+        progressTransfer.progress = 0
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                val inputStream: InputStream = contentResolver.openInputStream(uri) ?: return@launch
+                val bytes = inputStream.readBytes()
+                inputStream.close()
+
+                val boundary = "TVLinkBoundary"
+                val url = URL("http://$ip:$FILE_PORT/upload")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+
+                val body = buildString {
+                    append("--$boundary\r\n")
+                    append("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\n")
+                    append("Content-Type: application/octet-stream\r\n\r\n")
+                }.toByteArray() + bytes + "\r\n--$boundary--\r\n".toByteArray()
+
+                conn.outputStream.write(body)
+                conn.outputStream.flush()
+
+                val responseCode = conn.responseCode
+                withContext(Dispatchers.Main) {
+                    progressTransfer.progress = 100
+                    if (responseCode == 200) {
+                        tvTransferStatus.text = "✅ $fileName sent!"
+                        addLog("✅ File sent: $fileName")
+                        sendCommand("OPEN_FILE:$fileName")
+                    } else {
+                        tvTransferStatus.text = "❌ Transfer failed"
+                        addLog("❌ Transfer failed: $responseCode")
+                    }
+                    scope.launch {
+                        delay(3000)
+                        progressTransfer.visibility = View.GONE
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    tvTransferStatus.text = "❌ Error: ${e.message}"
+                    progressTransfer.visibility = View.GONE
+                    addLog("❌ ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun getFileName(uri: Uri): String {
+        var name = "file"
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index >= 0) name = cursor.getString(index)
+            }
+        }
+        return name
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        webSocketClient?.close()
+        scope.cancel()
+    }
+}
